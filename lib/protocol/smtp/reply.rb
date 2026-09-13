@@ -14,11 +14,17 @@ module Protocol
       def self.ok(text = "Ok") = new(250, text)
       def self.rejected(text = "Message rejected") = new(550, text)
 
+      # A CRLF in the text would end the line early and let whatever follows
+      # it pass for a reply of its own. An application that quotes a subject
+      # line or an address back at the client — both of which came from the
+      # client — would otherwise be handing it a reply stream to write.
+      SEPARATORS = /[\r\n]+/
+
       # @parameter code [Integer] The three digit reply code.
       # @parameter lines [String | Array(String)] The text of the reply.
       def initialize(code, lines)
         @code = Integer(code)
-        @lines = Array(lines)
+        @lines = Array(lines).map {|line| line.to_s.gsub(SEPARATORS, " ")}
 
         case @lines
         when [] then @lines = [""]

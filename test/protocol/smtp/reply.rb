@@ -33,6 +33,14 @@ describe Protocol::SMTP::Reply do
     end
   end
 
+  it "refuses to let the text end the line" do
+    # Whatever an application quotes back at a client came from that client:
+    reply = subject.ok("Queued \r\n550 Injected")
+
+    expect(reply.to_s).to be == "250 Queued  550 Injected"
+    expect(reply.lines.size).to be == 1
+  end
+
   it "classifies 4xx as transient and 5xx as permanent" do
     expect(subject.new(451, "Try later")).to be(:transient?)
     expect(subject.new(550, "No")).to be(:permanent?)
