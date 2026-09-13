@@ -122,6 +122,22 @@ bin/test                            # everything
 bin/test lib/protocol/smtp/server.rb # one file
 ```
 
+## Releasing
+
+Inside the devshell:
+
+``` shell
+bin/test                  # 1. green suite
+gem kit bump minor        # 2. bump the version
+gem kit changelog --write # 3. write the entry
+git commit -am "Release ..." # 4. the bump and the entry, one commit
+gem kit release           # 5. gates, build, push
+gem kit tag --push        # 6. tag it
+```
+
+Steps 2 and 5 are gates: a deprecation due at the new version, or a missing
+changelog section, stops them.
+
 ## License
 
 MIT.
