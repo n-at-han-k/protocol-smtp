@@ -13,7 +13,7 @@ require_relative "smtp/server"
 module Protocol
   # Abstractions for the SMTP protocol: the command/reply state machine
   # (RFC 5321) and the message it assembles (RFC 5322), for both sides of the
-  # conversation. No sockets, no concurrency, no dependencies — async-smtp
+  # conversation. No sockets and no concurrency — async-smtp
   # binds this to a real endpoint.
   #
   # @namespace

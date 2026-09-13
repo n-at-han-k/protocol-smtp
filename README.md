@@ -3,8 +3,9 @@
 Abstractions for the SMTP protocol: RFC 5321's command/reply state machine and
 the RFC 5322 message it assembles, for both sides of the conversation.
 
-No sockets, no concurrency, no dependencies. A `Connection` talks over anything
-that answers `#gets(separator, limit)`, `#write`, `#flush` and `#close` — a
+No sockets and no concurrency, and the one dependency is a deprecation DSL. A
+`Connection` talks over anything that answers `#gets(separator, limit)`,
+`#write`, `#flush` and `#close` — a
 `TCPSocket`, an `IO::Stream`, a `StringIO`. Binding it to an endpoint and a
 reactor is [async-smtp](../async-smtp)'s job, the way async-http binds
 protocol-http.

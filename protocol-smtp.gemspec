@@ -32,9 +32,16 @@ Gem::Specification.new do |spec|
   spec.files = Dir.glob(["lib/**/*.rb", "*.md", "LICENSE"], base: __dir__)
   spec.require_paths = ["lib"]
 
-  # No runtime dependencies. That is the point of a protocol gem.
+  # The deprecation DSL, and the only runtime dependency: declaring a
+  # deprecation is runtime work, and gem_kit is tiny and dependency-free
+  # itself, so a protocol gem stays a protocol gem. Nothing else here needs a
+  # gem — no sockets, no concurrency, which is the point.
+  spec.add_dependency "gem_kit", "~> 0.2"
+
   spec.add_development_dependency "lefthook", "~> 2.1"
   spec.add_development_dependency "rake", "~> 13.0"
   spec.add_development_dependency "rubocop", "~> 1.60"
   spec.add_development_dependency "scampi", "~> 1.0"
+  # The release toolchain: `gem kit bump|changelog|deprecations|release|tag`.
+  spec.add_development_dependency "gem_kit-release", "~> 0.3"
 end
