@@ -82,3 +82,69 @@ module Protocol
     end
   end
 end
+
+__END__
+
+new_message = lambda do |data, **options|
+  Protocol::SMTP::Message.new(from: "me@example.com", helo: "client", peer: "127.0.0.1", **options).tap do |message|
+    message.data << data
+  end
+end
+
+describe "protocol/smtp/message" do
+  it "keeps the envelope separate from what the headers claim" do
+    message = new_message.call("From: someone-else@example.com\r\n\r\nHello\r\n")
+    message.to << "you@example.com"
+
+    message.from.should == "me@example.com"
+    message.headers["from"].should == "someone-else@example.com"
+    message.to.should == ["you@example.com"]
+  end
+
+  it "unfolds a continued header (RFC 5322 2.2.3)" do
+    message = new_message.call("Subject: a very\r\n  long subject\r\nTo: you@example.com\r\n\r\nBody\r\n")
+
+    message.subject.should == "a very long subject"
+    message.headers["to"].should == "you@example.com"
+  end
+
+  it "separates the body at the blank line" do
+    new_message.call("Subject: Hi\r\n\r\nline one\r\nline two\r\n").body.should == "line one\r\nline two\r\n"
+  end
+
+  it "treats a message with no blank line as all headers and no body" do
+    # Which is also what a truncated one looks like:
+    message = new_message.call("just text\r\n")
+
+    message.headers.should == {}
+    message.body.should == ""
+  end
+
+  it "reports its size in bytes" do
+    new_message.call("\u03a9\r\n").bytesize.should == 4
+  end
+
+  it "is not secure unless it arrived over TLS" do
+    new_message.call("").should.not.be.secure
+    new_message.call("", secure: true).should.be.secure
+  end
+
+  it "deconstructs for pattern matching" do
+    message = new_message.call("Subject: URGENT\r\n\r\nnow\r\n")
+    message.to << "you@example.test"
+    urgent = nil
+
+    case message
+    in {to: [/@example\.test\z/, *], subject: /urgent/i}
+      urgent = message.peer
+    end
+
+    urgent.should == "127.0.0.1"
+
+    case message
+    in [from, [recipient]]
+      from.should == "me@example.com"
+      recipient.should == "you@example.test"
+    end
+  end
+end

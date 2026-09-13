@@ -73,3 +73,59 @@ module Protocol
     end
   end
 end
+
+__END__
+
+describe "protocol/smtp/reply" do
+  it "puts a single line reply on one line" do
+    reply = Protocol::SMTP::Reply.new(250, "Ok")
+
+    reply.to_s.should == "250 Ok"
+    reply.should.be.positive
+    reply.should.not.be.transient
+    reply.should.not.be.permanent
+  end
+
+  it "joins every line but the last to its code with a hyphen (RFC 5321 4.2.1)" do
+    reply = Protocol::SMTP::Reply.new(250, ["greets you", "SIZE 100", "8BITMIME"])
+
+    reply.to_s.should == "250-greets you\r\n250-SIZE 100\r\n250 8BITMIME"
+    reply.text.should == "greets you SIZE 100 8BITMIME"
+  end
+
+  it "still produces a valid line with no text at all" do
+    Protocol::SMTP::Reply.new(220, nil).to_s.should == "220 "
+  end
+
+  it "refuses to let the text end the line" do
+    # Whatever an application quotes back at a client came from that client:
+    reply = Protocol::SMTP::Reply.ok("Queued \r\n550 Injected")
+
+    reply.to_s.should == "250 Queued  550 Injected"
+    reply.lines.length.should == 1
+  end
+
+  it "classifies 4xx as transient and 5xx as permanent" do
+    Protocol::SMTP::Reply.new(451, "Try later").should.be.transient
+    Protocol::SMTP::Reply.new(550, "No").should.be.permanent
+    Protocol::SMTP::Reply.new(550, "No").should.not.be.positive
+  end
+
+  it "compares by code and lines" do
+    Protocol::SMTP::Reply.ok.should == Protocol::SMTP::Reply.new(250, "Ok")
+    Protocol::SMTP::Reply.ok.should.not == Protocol::SMTP::Reply.new(250, "Fine")
+    {Protocol::SMTP::Reply.ok => true}[Protocol::SMTP::Reply.new(250, "Ok")].should.be.true
+  end
+
+  it "deconstructs for pattern matching" do
+    matched = nil
+
+    case Protocol::SMTP::Reply.rejected("Spam")
+    in {code: 500.., lines: [text]}
+      matched = text
+    end
+
+    matched.should == "Spam"
+    Protocol::SMTP::Reply.ok.deconstruct.should == [250, ["Ok"]]
+  end
+end

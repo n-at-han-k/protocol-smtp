@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 task :test do
-  sh "bundle", "exec", "sus"
+  sh "bin/test"
 end
 
 task :lint do

@@ -161,15 +161,15 @@
     };
     version = "1.13.0";
   };
-  sus = {
+  scampi = {
     groups = ["development"];
     platforms = [];
     source = {
       remotes = ["https://rubygems.org"];
-      sha256 = "1srglja6vy499dwvcqssqvrlc0igmzkpwba80hxwzb7c6s29aq60";
+      sha256 = "04x366dnw081ajg6qbw24i6afisv7fsgyvvwnvlr000ah48k3d66";
       type = "gem";
     };
-    version = "0.37.2";
+    version = "1.0.0";
   };
   unicode-display_width = {
     dependencies = ["unicode-emoji"];

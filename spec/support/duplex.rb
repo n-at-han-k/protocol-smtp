@@ -2,6 +2,8 @@
 
 require "stringio"
 
+# The stream the tests talk over: it reads what they scripted and keeps what
+# was written back, so a whole conversation can be checked without a socket.
 module Protocol
   module SMTP
     # A stream that reads what the test scripted and keeps what was written

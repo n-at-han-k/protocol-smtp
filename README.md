@@ -111,6 +111,16 @@ No server-side `AUTH` (an `AUTH` command gets a `502`), no pipelining, no
 `CHUNKING`, no relaying or queueing, no DKIM or SPF. It is the conversation,
 not a mail system.
 
+## Tests
+
+They live in the `__END__` section of the file they test, and run with
+[scampi](https://rubygems.org/gems/scampi):
+
+``` shell
+bin/test                            # everything
+bin/test lib/protocol/smtp/server.rb # one file
+```
+
 ## License
 
 MIT.

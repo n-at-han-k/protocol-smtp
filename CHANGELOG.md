@@ -14,3 +14,4 @@
 - Client-side `STARTTLS` (RFC 3207) and `AUTH PLAIN`/`LOGIN` (RFC 4616),
   `EHLO` extension parsing, and a `HELO` fallback.
 - Server-side `STARTTLS`, advertised only when an upgrade is possible.
+- Tests live in `__END__` sections and run under `scampi`.

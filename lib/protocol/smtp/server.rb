@@ -283,3 +283,262 @@ module Protocol
     end
   end
 end
+
+__END__
+
+require "duplex"
+
+# Drive a scripted conversation to its end — the loop async-smtp runs — and
+# hand back the stream it happened over, plus the messages it produced.
+converse = lambda do |*script, reply: Protocol::SMTP::Reply.ok("queued"), **options|
+  stream = Protocol::SMTP::Duplex.new(script.map {|line| "#{line}\r\n"}.join)
+  server = Protocol::SMTP::Server.new(stream, domain: "mail.example.com", **options)
+  messages = []
+
+  server.write_greeting
+
+  while message = server.read_message
+    messages << message
+    server.write_reply(reply)
+  end
+
+  [stream, messages, server]
+end
+
+describe "protocol/smtp/server" do
+  it "answers each command of a transaction in order, and hands over one message" do
+    stream, messages = converse.call(
+      "EHLO client.example.com",
+      "MAIL FROM:<me@example.com>",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      "Subject: Hello",
+      "",
+      "Body text",
+      ".",
+      "QUIT",
+    )
+
+    stream.codes.should == [220, 250, 250, 250, 354, 250, 221]
+
+    messages.length.should == 1
+    messages.first.from.should == "me@example.com"
+    messages.first.to.should == ["you@example.com"]
+    messages.first.subject.should == "Hello"
+    messages.first.body.should == "Body text\r\n"
+    messages.first.helo.should == "client.example.com"
+  end
+
+  it "leaves the stream open for whoever owns it to close" do
+    stream, = converse.call("QUIT")
+
+    stream.should.not.be.closed
+  end
+
+  it "advertises its extensions on EHLO" do
+    stream, = converse.call("EHLO client.example.com")
+
+    stream.lines.should == [
+      "220 mail.example.com ESMTP",
+      "250-mail.example.com greets client.example.com",
+      "250-SIZE #{Protocol::SMTP::Server::DEFAULT_MAXIMUM_MESSAGE_SIZE}",
+      "250 8BITMIME",
+    ]
+  end
+
+  it "treats a greeting with no domain as a syntax error" do
+    converse.call("EHLO", "HELO").first.codes.should == [220, 501, 501]
+  end
+
+  it "refuses each command until its turn (RFC 5321 4.3.2)" do
+    stream, = converse.call(
+      "MAIL FROM:<me@example.com>",
+      "EHLO client",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      "MAIL FROM:<me@example.com>",
+      "DATA",
+    )
+
+    stream.codes.should == [220, 503, 250, 503, 503, 250, 503]
+  end
+
+  it "answers an unknown or unimplemented command without ending the conversation" do
+    stream, = converse.call("WHAT", "VRFY someone", "EXPN list", "HELP", "AUTH PLAIN abc", "NOOP", "MAIL", "RCPT")
+
+    stream.codes.should == [220, 500, 502, 502, 502, 502, 250, 501, 501]
+  end
+
+  it "abandons the transaction on RSET but keeps the greeting" do
+    stream, messages = converse.call(
+      "HELO client",
+      "MAIL FROM:<me@example.com>",
+      "RSET",
+      "RCPT TO:<you@example.com>",
+      "MAIL FROM:<other@example.com>",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      ".",
+    )
+
+    stream.codes.should == [220, 250, 250, 250, 503, 250, 250, 354, 250]
+    messages.first.from.should == "other@example.com"
+    messages.first.helo.should == "client"
+  end
+
+  it "starts the transaction over on a re-issued MAIL FROM (RFC 5321 4.1.1.2)" do
+    stream, messages = converse.call(
+      "HELO client",
+      "MAIL FROM:<first@example.com>",
+      "RCPT TO:<you@example.com>",
+      "MAIL FROM:<second@example.com>",
+      "RCPT TO:<other@example.com>",
+      "DATA",
+      ".",
+    )
+
+    stream.codes.should == [220, 250, 250, 250, 250, 250, 354, 250]
+    messages.first.from.should == "second@example.com"
+    messages.first.to.should == ["other@example.com"]
+  end
+
+  it "takes the address out of a command and ignores its parameters" do
+    _, messages = converse.call(
+      "HELO client",
+      "MAIL FROM:<me@example.com> SIZE=42 BODY=8BITMIME",
+      "RCPT TO:<one@example.com> NOTIFY=NEVER",
+      "RCPT TO:<two@example.com>",
+      "DATA",
+      ".",
+    )
+
+    messages.first.from.should == "me@example.com"
+    messages.first.to.should == ["one@example.com", "two@example.com"]
+  end
+
+  it "accepts a null sender, as a bounce requires" do
+    stream, messages = converse.call("HELO client", "MAIL FROM:<>", "RCPT TO:<you@example.com>", "DATA", ".")
+
+    stream.codes.should == [220, 250, 250, 250, 354, 250]
+    messages.first.from.should == ""
+  end
+
+  it "treats the verb as case insensitive (RFC 5321 2.4)" do
+    stream, = converse.call("ehlo client", "mail from:<me@example.com>", "Rcpt To:<you@example.com>", "data", ".")
+
+    stream.codes.should == [220, 250, 250, 250, 354, 250]
+  end
+
+  it "unstuffs a leading dot from the body (RFC 5321 4.5.2)" do
+    _, messages = converse.call(
+      "HELO client",
+      "MAIL FROM:<me@example.com>",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      "..hidden",
+      "...two",
+      "regular",
+      ".",
+    )
+
+    messages.first.data.should == ".hidden\r\n..two\r\nregular\r\n"
+  end
+
+  it "keeps reading an over-sized body and refuses it at the terminating dot" do
+    # Answering mid-DATA would reply to the rest of the message as if it were
+    # commands (RFC 1870 6.2):
+    stream, messages = converse.call(
+      "HELO client",
+      "MAIL FROM:<me@example.com>",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      "x" * 100,
+      "MAIL FROM:<not-a-command@example.com>",
+      ".",
+      "NOOP",
+      maximum_message_size: 64,
+    )
+
+    stream.codes.should == [220, 250, 250, 250, 354, 552, 250]
+    messages.should.be.empty
+  end
+
+  it "advertises STARTTLS, upgrades the stream, and forgets the transaction" do
+    upgraded = Protocol::SMTP::Duplex.new("EHLO client\r\nQUIT\r\n")
+
+    stream, _, server = converse.call(
+      "EHLO client",
+      "MAIL FROM:<me@example.com>",
+      "STARTTLS",
+      starttls: proc {upgraded},
+    )
+
+    stream.lines.should == [
+      "220 mail.example.com ESMTP",
+      "250-mail.example.com greets client",
+      "250-SIZE #{Protocol::SMTP::Server::DEFAULT_MAXIMUM_MESSAGE_SIZE}",
+      "250-8BITMIME",
+      "250 STARTTLS",
+      "250 Ok",
+      "220 Ready to start TLS",
+    ]
+
+    # Everything after the upgrade went over the new stream, which no longer
+    # offers STARTTLS, and the client had to introduce itself again:
+    upgraded.lines.should == [
+      "250-mail.example.com greets client",
+      "250-SIZE #{Protocol::SMTP::Server::DEFAULT_MAXIMUM_MESSAGE_SIZE}",
+      "250 8BITMIME",
+      "221 Bye",
+    ]
+
+    server.should.be.secure
+  end
+
+  it "neither advertises nor allows TLS it cannot do" do
+    stream, = converse.call("EHLO client", "STARTTLS")
+
+    stream.codes.should == [220, 250, 454]
+    stream.lines.should.not.include "250 STARTTLS"
+  end
+
+  it "ends the conversation at the end of the stream" do
+    converse.call("HELO client", "MAIL FROM:<me@example.com>").first.codes.should == [220, 250, 250]
+  end
+
+  it "refuses an over-long command line rather than guessing" do
+    stream = Protocol::SMTP::Duplex.new("HELO #{"x" * 100}\r\n")
+    server = Protocol::SMTP::Server.new(stream, maximum_line_length: 32)
+    server.write_greeting
+
+    lambda { server.read_message }.should.raise(Protocol::SMTP::LineLengthError)
+  end
+
+  it "writes exactly the reply the caller answered with" do
+    stream, = converse.call(
+      "HELO client",
+      "MAIL FROM:<me@example.com>",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      ".",
+      reply: Protocol::SMTP::Reply.rejected("Spam"),
+    )
+
+    stream.lines.last.should == "550 Spam"
+  end
+
+  it "says nothing for a caller with nothing to say" do
+    # The reply to a message is not the protocol's to invent:
+    stream, = converse.call(
+      "HELO client",
+      "MAIL FROM:<me@example.com>",
+      "RCPT TO:<you@example.com>",
+      "DATA",
+      ".",
+      "NOOP",
+      reply: nil,
+    )
+
+    stream.codes.should == [220, 250, 250, 250, 354, 250]
+  end
+end

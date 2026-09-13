@@ -256,3 +256,171 @@ module Protocol
     end
   end
 end
+
+__END__
+
+require "duplex"
+
+# A client whose server has already said everything it is going to say.
+scripted = lambda do |*script|
+  stream = Protocol::SMTP::Duplex.new(script.map {|line| "#{line}\r\n"}.join)
+
+  [Protocol::SMTP::Client.new(stream), stream]
+end
+
+describe "protocol/smtp/client" do
+  it "reads what the server said first, once" do
+    client, = scripted.call("220 mail.example.com ESMTP")
+
+    client.greeting.code.should == 220
+    client.greeting.text.should == "mail.example.com ESMTP"
+    client.greeting.should.be.identical_to client.greeting
+  end
+
+  it "reads a multi-line reply as one reply, and its lines as extensions" do
+    client, = scripted.call(
+      "220 mail.example.com ESMTP",
+      "250-mail.example.com greets client",
+      "250-SIZE 35651584",
+      "250-AUTH PLAIN LOGIN",
+      "250-STARTTLS",
+      "250 8BITMIME",
+    )
+
+    reply = client.ehlo("client")
+    reply.code.should == 250
+    reply.lines.length.should == 5
+
+    client.extensions.keys.should == ["SIZE", "AUTH", "STARTTLS", "8BITMIME"]
+    client.should.be.starttls
+    client.mechanisms.should == ["PLAIN", "LOGIN"]
+    client.maximum_message_size.should == 35_651_584
+  end
+
+  it "falls back to HELO for a server that does not know EHLO (RFC 5321 2.2.1)" do
+    client, stream = scripted.call("220 mail.example.com ESMTP", "500 Unknown command", "250 mail.example.com")
+
+    client.hello("client").code.should == 250
+    stream.lines.should == ["EHLO client", "HELO client"]
+    client.extensions.should == {}
+  end
+
+  it "refuses to guess at anything that is not a reply" do
+    client, = scripted.call("not a reply at all")
+
+    lambda { client.greeting }.should.raise(Protocol::SMTP::InvalidReplyError)
+  end
+
+  it "reports a peer that went away mid-reply" do
+    client, = scripted.call("250-first")
+
+    lambda { client.read_reply }.should.raise(Protocol::SMTP::ClosedError)
+  end
+
+  it "sends a whole transaction in order, then the body and its terminator" do
+    client, stream = scripted.call(
+      "220 mail.example.com ESMTP",
+      "250-mail.example.com greets client",
+      "250 8BITMIME",
+      "250 Ok",
+      "250 Ok",
+      "250 Ok",
+      "354 End data with <CR><LF>.<CR><LF>",
+      "250 Queued",
+    )
+
+    reply = client.deliver(
+      from: "me@example.com",
+      to: ["one@example.com", "two@example.com"],
+      body: "Subject: Hi\r\n\r\nBody\r\n",
+      domain: "client",
+    )
+
+    reply.code.should == 250
+    stream.lines.should == [
+      "EHLO client",
+      "MAIL FROM:<me@example.com>",
+      "RCPT TO:<one@example.com>",
+      "RCPT TO:<two@example.com>",
+      "DATA",
+      "Subject: Hi",
+      "",
+      "Body",
+      ".",
+    ]
+  end
+
+  it "runs a transaction on a session that has already introduced itself" do
+    client, stream = scripted.call("250 Ok", "250 Ok", "354 Go", "250 Queued")
+
+    client.transaction(from: "me@example.com", to: "you@example.com", body: "Hi\r\n").code.should == 250
+    stream.lines.should == ["MAIL FROM:<me@example.com>", "RCPT TO:<you@example.com>", "DATA", "Hi", "."]
+  end
+
+  it "stuffs a leading dot so the body cannot end the message (RFC 5321 4.5.2)" do
+    client, stream = scripted.call("354 Go ahead", "250 Queued")
+
+    client.data(".\r\n.hidden\r\ntext\r\n")
+    stream.lines.should == ["DATA", "..", "..hidden", "text", "."]
+  end
+
+  it "stops a transaction rather than sending a body nobody will take" do
+    client, stream = scripted.call(
+      "220 mail.example.com ESMTP",
+      "250 mail.example.com greets client",
+      "250 Ok",
+      "550 No such user",
+    )
+
+    error = lambda do
+      client.deliver(from: "me@example.com", to: "nobody@example.com", body: "Hi", domain: "client")
+    end.should.raise(Protocol::SMTP::ReplyError)
+
+    error.reply.code.should == 550
+    stream.lines.should.not.include "DATA"
+  end
+
+  it "sends AUTH PLAIN credentials as one base64 blob (RFC 4616)" do
+    client, stream = scripted.call("235 Authenticated")
+
+    client.auth_plain("user", "pass").code.should == 235
+    stream.lines.should == ["AUTH PLAIN #{["\0user\0pass"].pack("m0")}"]
+  end
+
+  it "answers each AUTH LOGIN challenge in turn" do
+    client, stream = scripted.call("334 VXNlcm5hbWU6", "334 UGFzc3dvcmQ6", "235 Authenticated")
+
+    client.auth_login("user", "pass").code.should == 235
+    stream.lines.should == ["AUTH LOGIN", ["user"].pack("m0"), ["pass"].pack("m0")]
+  end
+
+  it "picks a mechanism the server offered" do
+    client, stream = scripted.call("220 ESMTP", "250-greets", "250 AUTH LOGIN", "334 x", "334 y", "235 Ok")
+    client.ehlo("client")
+
+    client.authenticate("user", "pass").code.should == 235
+    stream.lines.should.include "AUTH LOGIN"
+  end
+
+  it "says so rather than sending credentials nothing can carry" do
+    client, = scripted.call("220 ESMTP", "250-greets", "250 AUTH GSSAPI")
+    client.ehlo("client")
+
+    lambda { client.authenticate("user", "pass") }.should.raise(Protocol::SMTP::AuthenticationError)
+  end
+
+  it "asks for STARTTLS and leaves the upgrade to the caller" do
+    client, stream = scripted.call("220 Ready to start TLS")
+
+    client.starttls.code.should == 220
+    stream.lines.should == ["STARTTLS"]
+  end
+
+  it "ends the conversation on QUIT but leaves the stream to its owner" do
+    client, stream = scripted.call("221 Bye")
+
+    client.quit.code.should == 221
+    client.should.be.closed
+    stream.should.not.be.closed
+  end
+end

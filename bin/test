@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# The tests live in __END__ sections of the files they test, so they need this
+# working tree on the load path rather than whatever version bundler resolved.
+# spec/support joins it so a fixture is `require "duplex"`, not a path walk.
+export RUBYOPT="-I$(pwd)/lib -I$(pwd)/spec/support${RUBYOPT:+ $RUBYOPT}"
+
+# Given nothing, scampi walks the whole repo looking for an __END__ section,
+# which needs ripgrep and reaches examples/. The library is named instead.
+# Pass paths to run a subset: bin/test lib/protocol/smtp/server.rb
+if [ $# -gt 0 ]; then
+  exec bundle exec scampi "$@"
+fi
+
+exec bundle exec scampi "lib/**/*.rb"

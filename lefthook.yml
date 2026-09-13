@@ -8,6 +8,6 @@ pre-commit:
     secrets:
       run: nix develop path:. --command trufflehog git file://. --since-commit HEAD --only-verified --fail
     tests:
-      run: nix develop path:. --command bundle exec sus
+      run: nix develop path:. --command bin/test
     lint:
       run: nix develop path:. --command bundle exec rubocop

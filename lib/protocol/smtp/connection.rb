@@ -90,3 +90,64 @@ module Protocol
     end
   end
 end
+
+__END__
+
+require "duplex"
+
+# A connection over a scripted stream, with a small limit so the length rules
+# are testable without thousand-byte lines.
+open_connection = lambda do |input, limit: 32|
+  stream = Protocol::SMTP::Duplex.new(input)
+
+  [Protocol::SMTP::Connection.new(stream, maximum_line_length: limit), stream]
+end
+
+describe "protocol/smtp/connection" do
+  it "reads a line without its terminator, CRLF or bare LF" do
+    open_connection.call("HELO example.com\r\n").first.read_line.should == "HELO example.com"
+
+    # A peer that forgets the CR is served rather than left hanging:
+    open_connection.call("NOOP\n").first.read_line.should == "NOOP"
+
+    # And the end of the stream is not a line at all:
+    open_connection.call("").first.read_line.should.be.nil
+  end
+
+  it "counts the line length limit the way RFC 5321 4.5.3.1 does, terminator included" do
+    open_connection.call("#{"x" * 30}\r\n").first.read_line.should == "x" * 30
+
+    lambda do
+      open_connection.call("#{"x" * 31}\r\n").first.read_line
+    end.should.raise(Protocol::SMTP::LineLengthError)
+  end
+
+  it "tells an over-long line apart from a peer that went away mid-line" do
+    lambda do
+      open_connection.call("NOOP").first.read_line
+    end.should.raise(Protocol::SMTP::ClosedError)
+  end
+
+  it "writes lines with CRLF" do
+    connection, stream = open_connection.call("")
+    connection.write_line("250 Ok")
+
+    stream.output.should == "250 Ok\r\n"
+  end
+
+  it "shuts the conversation down without touching the stream" do
+    # QUIT still has a 221 to write before the socket can go:
+    connection, stream = open_connection.call("")
+    connection.shutdown
+
+    connection.should.be.closed
+    stream.should.not.be.closed
+  end
+
+  it "closes the stream when asked to" do
+    connection, stream = open_connection.call("")
+    connection.close
+
+    stream.should.be.closed
+  end
+end
