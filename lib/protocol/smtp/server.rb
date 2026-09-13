@@ -9,14 +9,17 @@ module Protocol
     # The server side of an SMTP conversation: RFC 5321's command/reply state
     # machine over a stream.
     #
-    #   Protocol::SMTP::Server.new(stream).each do |message|
-    #     Protocol::SMTP::Reply.ok("queued")
+    #   server.write_greeting
+    #
+    #   while message = server.read_message
+    #     server.write_reply(Protocol::SMTP::Reply.ok("queued"))
     #   end
     #
-    # The block is called with each complete message and answers with the
-    # Reply the client is given. What a framework lets its users return
-    # instead — a String, a status code, nothing at all — is that framework's
-    # business, not the protocol's.
+    # #read_message answers every command the protocol itself owns and hands
+    # back each complete message; the reply to the message is the caller's to
+    # write. Who drives that loop, what an application is allowed to return,
+    # and when the stream is closed are all somebody else's business —
+    # async-smtp's, for a socket on a reactor.
     class Server < Connection
       DEFAULT_MAXIMUM_MESSAGE_SIZE = 20 * 1024 * 1024
 
@@ -64,35 +67,50 @@ module Protocol
       # @returns [Boolean] Whether the connection was upgraded to TLS.
       def secure? = @secure
 
-      # Greet the client, then answer every line it sends until it quits or
-      # goes away. Each complete message goes to the block, whose return value
-      # is written back as the reply.
+      # In SMTP the server talks first.
       #
-      # @yields {|message| ...} Each complete message.
-      #   @parameter message [Message]
-      #   @returns [Reply | Nil]
-      def each(&block)
-        write(Reply.new(220, "#{@domain} ESMTP"))
+      # @parameter reply [Reply] What to greet the client with.
+      def write_greeting(reply = Reply.new(220, "#{@domain} ESMTP"))
+        write_reply(reply)
+      end
 
-        while !closed? && (line = read_line)
-          write(receive(line, &block))
+      # Read lines, answering each command the state machine owns, until
+      # either a message is complete or the client is finished.
+      #
+      # @returns [Message | Nil] The next complete message, or nil when the
+      #   client quit or the stream ended.
+      def read_message
+        message = nil
+
+        while message.nil? && !closed? && (line = read_line)
+          receive(line).then do |result|
+            case result
+            when Message then message = result
+            when Reply then write_reply(result)
+            end
+          end
         end
-      ensure
-        close
+
+        message
+      end
+
+      # The reply to a message, which is the one reply in the conversation the
+      # protocol has no opinion about.
+      #
+      # @parameter reply [Reply | Nil] Nil says nothing, for a caller that has
+      #   already answered.
+      def write_reply(reply)
+        case reply
+        when nil then nil
+        else write_line(reply.to_s)
+        end
       end
 
       private
 
-        def write(reply)
-          case reply
-          when nil then nil
-          else write_line(reply.to_s)
-          end
-        end
-
-        def receive(line, &block)
+        def receive(line)
           case @state
-          when :data then collect(line, &block)
+          when :data then collect(line)
           when :discard then discard(line)
           else dispatch(line)
           end
@@ -160,7 +178,7 @@ module Protocol
           case @starttls
           when nil then Reply.new(454, "TLS not available")
           else
-            write(Reply.new(220, "Ready to start TLS"))
+            write_reply(Reply.new(220, "Ready to start TLS"))
             @stream = @starttls.call(@stream)
             @secure = true
             reset(nil)
@@ -211,9 +229,9 @@ module Protocol
         # RFC 5321 4.5.2: a line of a single dot ends the message, and a
         # leading dot on any other line was stuffed by the client on the way
         # out — it comes back off here.
-        def collect(line, &block)
+        def collect(line)
           case line
-          when "." then finish(&block)
+          when "." then finish
           else append(line)
           end
         end
@@ -241,10 +259,11 @@ module Protocol
           end
         end
 
+        # The message, with the transaction it arrived in wound up: the reply
+        # to it is written later, by whoever asked for it.
         def finish
-          @message.then do |message|
+          @message.tap do
             reset(@helo)
-            yield(message)
           end
         end
 

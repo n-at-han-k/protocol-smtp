@@ -14,19 +14,28 @@ protocol-http.
 ```ruby
 require "protocol/smtp"
 
-Protocol::SMTP::Server.new(stream, domain: "mail.example.com").each do |message|
+server = Protocol::SMTP::Server.new(stream, domain: "mail.example.com")
+server.write_greeting
+
+while message = server.read_message
   message.from                 # "me@example.com" — the envelope
   message.to                   # ["you@example.com"]
   message.subject              # "Hello" — the headers, unfolded
   message.data                 # the whole of it, verbatim
 
-  Protocol::SMTP::Reply.ok("queued")
+  server.write_reply(Protocol::SMTP::Reply.ok("queued"))
 end
 ```
 
-`#each` greets the client, answers every command until it quits, and calls the
-block with each complete message. The block returns the `Reply` the client is
-given; `Reply.ok` and `Reply.rejected` cover the usual two.
+`#read_message` answers every command the state machine owns — `MAIL`, `RCPT`,
+`RSET`, `NOOP`, `QUIT`, the 354 before `DATA` — and hands back each complete
+message. The reply *to the message* is the one reply the protocol has no
+opinion about, so it is yours to write.
+
+Who drives that loop, what an application is allowed to answer with, and when
+the stream gets closed are all deliberately absent: that is
+[async-smtp](../async-smtp)'s job, for a socket on a reactor. Nothing here
+opens, closes, or waits on anything.
 
 The state machine enforces RFC 5321 4.3.2 sequencing (`MAIL` before `RCPT`
 before `DATA`, a `503` otherwise), re-issued `MAIL FROM` starting the
@@ -62,7 +71,8 @@ client.quit
 Each command returns its `Reply` rather than raising on one, because which
 codes are fatal depends on what you are doing. `#deliver`, which has to get a
 whole transaction through in order, raises `ReplyError` on anything it cannot
-continue from.
+continue from. `#quit` sends `QUIT` and reads the 221; closing the stream is
+for whoever opened it.
 
 `#hello` falls back to `HELO` for a server that does not know `EHLO`
 (RFC 5321 2.2.1), and what `EHLO` advertised is available afterwards:

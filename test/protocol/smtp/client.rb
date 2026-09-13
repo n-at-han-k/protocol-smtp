@@ -202,10 +202,10 @@ describe Protocol::SMTP::Client do
   with "QUIT" do
     let(:script) {["221 Bye"]}
 
-    it "closes the connection after the reply" do
+    it "ends the conversation but leaves the stream to its owner" do
       expect(client.quit.code).to be == 221
       expect(client).to be(:closed?)
-      expect(stream).to be(:closed?)
+      expect(stream).not.to be(:closed?)
     end
   end
 end

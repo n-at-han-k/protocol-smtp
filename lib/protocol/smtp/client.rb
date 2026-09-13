@@ -102,9 +102,12 @@ module Protocol
       # @returns [Reply]
       def noop = command("NOOP")
 
+      # Say goodbye and read the 221. The stream stays open: whoever opened it
+      # closes it.
+      #
       # @returns [Reply]
       def quit
-        command("QUIT").tap { close }
+        command("QUIT").tap { shutdown }
       end
 
       # RFC 4616: the credentials go in one base64 blob, NUL separated, with an

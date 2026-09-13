@@ -7,11 +7,14 @@ describe Protocol::SMTP::Server do
   let(:stream) {Protocol::SMTP::Duplex.new(script.map {|line| "#{line}\r\n"}.join)}
   let(:messages) {[]}
 
-  # Run the scripted conversation to completion and return the reply codes.
+  # Drive the scripted conversation to its end — the loop async-smtp runs —
+  # and return the reply codes that came back.
   def converse(server = subject.new(stream, domain: "mail.example.com", **options))
-    server.each do |message|
+    server.write_greeting
+
+    while message = server.read_message
       messages << message
-      Protocol::SMTP::Reply.ok("queued")
+      server.write_reply(Protocol::SMTP::Reply.ok("queued"))
     end
 
     stream.codes
@@ -49,10 +52,10 @@ describe Protocol::SMTP::Server do
       expect(messages.first.helo).to be == "client.example.com"
     end
 
-    it "closes the stream when the conversation ends" do
+    it "leaves the stream open for whoever owns it to close" do
       converse
 
-      expect(stream).to be(:closed?)
+      expect(stream).not.to be(:closed?)
     end
   end
 
@@ -270,7 +273,6 @@ describe Protocol::SMTP::Server do
 
     it "ends the conversation at the end of the stream" do
       expect(converse).to be == [220, 250, 250]
-      expect(stream).to be(:closed?)
     end
   end
 
@@ -280,23 +282,39 @@ describe Protocol::SMTP::Server do
 
     it "refuses the connection rather than guessing" do
       server = subject.new(stream, **options)
+      server.write_greeting
 
-      expect{server.each {nil}}.to raise_exception(Protocol::SMTP::LineLengthError)
-      expect(stream).to be(:closed?)
+      expect{server.read_message}.to raise_exception(Protocol::SMTP::LineLengthError)
     end
   end
 
-  with "a block that returns its own reply" do
+  with "a caller that answers with its own reply" do
     let(:script) {["HELO client", "MAIL FROM:<me@example.com>", "RCPT TO:<you@example.com>", "DATA", "."]}
 
-    it "writes what the block returned" do
+    it "writes exactly that" do
       server = subject.new(stream)
+      server.write_greeting
 
-      server.each do |message|
-        Protocol::SMTP::Reply.rejected("Spam")
+      while server.read_message
+        server.write_reply(Protocol::SMTP::Reply.rejected("Spam"))
       end
 
       expect(stream.lines.last).to be == "550 Spam"
+    end
+  end
+
+  with "a caller with nothing to say" do
+    let(:script) {["HELO client", "MAIL FROM:<me@example.com>", "RCPT TO:<you@example.com>", "DATA", ".", "NOOP"]}
+
+    it "says nothing, because the reply to a message is not the protocol's" do
+      server = subject.new(stream)
+      server.write_greeting
+
+      while server.read_message
+        server.write_reply(nil)
+      end
+
+      expect(stream.codes).to be == [220, 250, 250, 250, 354, 250]
     end
   end
 end

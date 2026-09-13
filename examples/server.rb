@@ -14,10 +14,20 @@ Addrinfo.tcp("127.0.0.1", 2525).listen do |server|
   loop do
     peer, address = server.accept
 
-    Protocol::SMTP::Server.new(peer, domain: "example.test", peer: address.ip_address).each do |message|
-      puts "#{message.from} -> #{message.to.join(", ")} (#{message.bytesize} bytes): #{message.subject}"
+    connection = Protocol::SMTP::Server.new(peer, domain: "example.test", peer: address.ip_address)
 
-      Protocol::SMTP::Reply.ok("Queued")
+    begin
+      # The loop, the application and closing the socket are the caller's —
+      # this is what async-smtp does for you, on a reactor.
+      connection.write_greeting
+
+      while message = connection.read_message
+        puts "#{message.from} -> #{message.to.join(", ")} (#{message.bytesize} bytes): #{message.subject}"
+
+        connection.write_reply(Protocol::SMTP::Reply.ok("Queued"))
+      end
+    ensure
+      connection.close
     end
   end
 end

@@ -3,7 +3,9 @@
 ## 0.1.0
 
 - The server state machine (`Protocol::SMTP::Server`): RFC 5321 sequencing,
-  dot unstuffing, line length and message size limits.
+  dot unstuffing, line length and message size limits, as
+  `#write_greeting` / `#read_message` / `#write_reply` primitives. The loop,
+  the application and the stream's lifetime belong to the caller.
 - The client (`Protocol::SMTP::Client`): commands, multi-line reply parsing,
   dot stuffing, and `#deliver` for a whole transaction.
 - `Protocol::SMTP::Message` with envelope, unfolded headers, and pattern
