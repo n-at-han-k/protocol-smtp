@@ -159,8 +159,27 @@ module Protocol
         read_reply
       end
 
-      # One whole transaction, refusing to carry on past a reply that means it
-      # cannot succeed.
+      # One whole transaction on a connection that has already introduced
+      # itself, refusing to carry on past a reply that means it cannot
+      # succeed. This is the half of #deliver worth repeating: a session can
+      # carry any number of transactions, and only one EHLO.
+      #
+      # @parameter from [String] The envelope sender.
+      # @parameter to [String | Array(String)] The envelope recipients.
+      # @parameter body [String] The message, headers and all.
+      # @returns [Reply] The reply to the message itself.
+      # @raises [ReplyError] If any step of the transaction was refused.
+      def transaction(from:, to:, body:)
+        expect(mail_from(from), 250)
+
+        Array(to).each do |address|
+          expect(rcpt_to(address), 250)
+        end
+
+        expect(data(body), 250)
+      end
+
+      # Introduce ourselves and send one message.
       #
       # @parameter from [String] The envelope sender.
       # @parameter to [String | Array(String)] The envelope recipients.
@@ -170,13 +189,8 @@ module Protocol
       # @raises [ReplyError] If any step of the transaction was refused.
       def deliver(from:, to:, body:, domain: "localhost")
         expect(hello(domain), 250)
-        expect(mail_from(from), 250)
 
-        Array(to).each do |address|
-          expect(rcpt_to(address), 250)
-        end
-
-        expect(data(body), 250)
+        transaction(from: from, to: to, body: body)
       end
 
       # @parameter line [String] The command line, without its terminator.

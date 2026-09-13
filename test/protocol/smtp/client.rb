@@ -209,3 +209,22 @@ describe Protocol::SMTP::Client do
     end
   end
 end
+
+describe Protocol::SMTP::Client do
+  with "#transaction on an established session" do
+    let(:stream) {Protocol::SMTP::Duplex.new(["250 Ok", "250 Ok", "354 Go", "250 Queued"].map {|l| "#{l}\r\n"}.join)}
+    let(:client) {subject.new(stream)}
+
+    it "sends the envelope and body without another EHLO" do
+      expect(client.transaction(from: "me@example.com", to: "you@example.com", body: "Hi\r\n").code).to be == 250
+
+      expect(stream.lines).to be == [
+        "MAIL FROM:<me@example.com>",
+        "RCPT TO:<you@example.com>",
+        "DATA",
+        "Hi",
+        ".",
+      ]
+    end
+  end
+end

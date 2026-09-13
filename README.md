@@ -31,7 +31,18 @@ given; `Reply.ok` and `Reply.rejected` cover the usual two.
 The state machine enforces RFC 5321 4.3.2 sequencing (`MAIL` before `RCPT`
 before `DATA`, a `503` otherwise), re-issued `MAIL FROM` starting the
 transaction over (4.1.1.2), dot unstuffing (4.5.2), the line length limit
-(4.5.3.1) and a message size limit.
+(4.5.3.1) and a message size limit. Past that size it keeps reading the body
+and answers `552` at the terminating dot, rather than replying to the rest of
+the message as if it were commands (RFC 1870 6.2).
+
+`EHLO` advertises `SIZE`, `8BITMIME`, and `STARTTLS` when — and only when — an
+upgrade is possible. Pass a callable that takes the current stream and returns
+an encrypted one; the `220` goes out in the clear first, and the client has to
+`EHLO` again afterwards (RFC 3207 4.2):
+
+```ruby
+Protocol::SMTP::Server.new(stream, starttls: ->(stream) {OpenSSL::SSL::SSLSocket.new(stream, context).tap(&:accept)})
+```
 
 What a framework lets *its* users return instead of a `Reply` — a String, a
 status code, nothing at all — is that framework's business, not the protocol's.
@@ -53,6 +64,22 @@ codes are fatal depends on what you are doing. `#deliver`, which has to get a
 whole transaction through in order, raises `ReplyError` on anything it cannot
 continue from.
 
+`#hello` falls back to `HELO` for a server that does not know `EHLO`
+(RFC 5321 2.2.1), and what `EHLO` advertised is available afterwards:
+
+```ruby
+client.hello("client.example.com")
+client.extensions            # {"SIZE" => "35651584", "AUTH" => "PLAIN LOGIN", ...}
+client.starttls?             # true — ask with #starttls, then replace client.stream
+client.mechanisms            # ["PLAIN", "LOGIN"]
+client.maximum_message_size  # 35651584
+
+client.authenticate("user", "password")  # AUTH PLAIN (RFC 4616), or LOGIN
+```
+
+Upgrading the stream itself is the caller's job, because a protocol gem has no
+socket to upgrade — that is [async-smtp](../async-smtp)'s `Client`.
+
 ## Message
 
 The envelope (`#from`, `#to`) is what the conversation said; the headers are
@@ -70,8 +97,9 @@ end
 
 ## What it does not do
 
-No STARTTLS, no AUTH, no pipelining, no relaying or queueing. It is the
-conversation, not a mail system.
+No server-side `AUTH` (an `AUTH` command gets a `502`), no pipelining, no
+`CHUNKING`, no relaying or queueing, no DKIM or SPF. It is the conversation,
+not a mail system.
 
 ## License
 
