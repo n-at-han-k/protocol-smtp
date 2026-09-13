@@ -97,9 +97,9 @@ describe Protocol::SMTP::Client do
 
     it "sends the commands in order, then the body and its terminator" do
       reply = client.deliver(
-        from: "me@example.com",
-        to: ["one@example.com", "two@example.com"],
-        body: "Subject: Hi\r\n\r\nBody\r\n",
+        from:   "me@example.com",
+        to:     ["one@example.com", "two@example.com"],
+        body:   "Subject: Hi\r\n\r\nBody\r\n",
         domain: "client",
       )
 
