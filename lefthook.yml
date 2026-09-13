@@ -1,0 +1,13 @@
+# Git hooks (managed by lefthook). Install with `bundle exec lefthook install`.
+#
+# `nix develop path:.` rather than `nix develop`: inside a pre-commit hook the
+# git form evaluates a stale tree, so a commit that adds a dependency could
+# never pass the suite that needs it.
+pre-commit:
+  commands:
+    secrets:
+      run: nix develop path:. --command trufflehog git file://. --since-commit HEAD --only-verified --fail
+    tests:
+      run: nix develop path:. --command bundle exec sus
+    lint:
+      run: nix develop path:. --command bundle exec rubocop

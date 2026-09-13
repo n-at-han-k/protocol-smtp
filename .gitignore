@@ -1,0 +1,9 @@
+/.bundle
+/.direnv
+/.yardoc
+/doc
+/pkg
+/tmp
+/result
+/result-*
+.DS_Store
